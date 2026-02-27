@@ -3,17 +3,23 @@ package org.example.orderservice.service;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.example.orderservice.dto.CreateOrderRequest;
+import org.example.orderservice.dto.OrderCreateEvent;
 import org.example.orderservice.entity.IdempotencyRecord;
 import org.example.orderservice.entity.Order;
 import org.example.orderservice.entity.OrderStatus;
+import org.example.orderservice.entity.Outbox;
 import org.example.orderservice.exception.IdempotencyConflictException;
 import org.example.orderservice.repository.IdempotencyRecordRepo;
 import org.example.orderservice.repository.OrderRepo;
+import org.example.orderservice.repository.OutboxRepo;
 import org.example.orderservice.utils.HashUtil;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -21,6 +27,8 @@ public class OrderService {
 
     private final OrderRepo orderRepo;
     private final IdempotencyRecordRepo  idempotencyRecordRepo;
+    private final OutboxRepo outboxRepo;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public Order create(CreateOrderRequest request, String idempotence) {
@@ -56,6 +64,27 @@ public class OrderService {
             idempotencyRecord.setOrderId(savedOrder.getOrderId());
 
             idempotencyRecordRepo.save(idempotencyRecord);
+
+            UUID eventId = UUID.randomUUID();
+            OrderCreateEvent event = new OrderCreateEvent(
+                    eventId,
+                    savedOrder.getOrderId(),
+                    savedOrder.getUserId(),
+                    savedOrder.getOrderAmount(),
+                    "ORDER_CREATED",
+                    Instant.now()
+            );
+
+            String payload = objectMapper.writeValueAsString(event);
+
+            Outbox outbox = new Outbox();
+            outbox.setEventId(eventId);
+            outbox.setAggregateType("ORDER");
+            outbox.setAggregateId(savedOrder.getOrderId());
+            outbox.setEventType("ORDER_CREATED");
+            outbox.setPayload(payload);
+
+            outboxRepo.save(outbox);
 
             return order;
         }
